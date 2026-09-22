@@ -61,6 +61,14 @@ const b9i = byName(w3('r9', R.byId('r9').design.initial), '너울').brokenAt;
 assert.ok(!(b9i >= 2600 && b9i <= 2800), 'R9 initial fails');
 const b9 = byName(w3('r9', { xs: 2550, hmid: 2 }), '너울').brokenAt;
 assert.ok(b9 >= 2600 && b9 <= 2800, `R9 solvable: ${b9}`);
+// 파고 대결: 파고만 다르면 동시 도착
+const rh = R.byId('rh'); const sh = sim(rh, rh.lanes.map(() => rh.bathy));
+const ts = sh.lanes.map(l => l.finishTime);
+assert.ok(Math.max(...ts) - Math.min(...ts) < 0.5, `rh tie: ${ts}`);
+// 변수 문항 정합성
+for (const r of R.RACES) for (const b of (r.bets || [])) if (b.type === 'choice') {
+  assert.ok(b.answers && b.answers.every(a => a >= 0 && a < b.options.length), `choice answers valid in ${r.id}`);
+}
 const boss = R.byId('boss'); const sb = sim(boss, boss.lanes.map(() => boss.bathy), boss.step);
 near(byName(sb, '쓰나미').finishTime / 3600, 24, 1, 'boss ~24 h');
 assert.ok(byName(sb, '너울').finishTime / 86400 > 8, 'boss swell ~9 days');

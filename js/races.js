@@ -59,7 +59,7 @@
   /* ---------- 원리 카드 ---------- */
   const CARDS = {
     c1: { id: 'c1', no: '①', title: '심해파는 파장이 길수록 빠르다', formula: 'c = √(gλ / 2π)',
-          line: '깊은 바다에선 수심이 상관없다. 파장이 승부를 정한다.' },
+          line: '깊은 바다에선 수심도 파고도 상관없다. 파장이 승부를 정한다.' },
     c2: { id: 'c2', no: '②', title: '심해파 속도식', formula: 'c = √(gλ / 2π) ≈ 1.25 √λ',
           line: '파장이 2배면 속도는 √2배. 그래서 접전이 된다.' },
     c3: { id: 'c3', no: '③', title: '주기가 길면 파장도 길다', formula: 'λ = gT² / 2π',
@@ -93,15 +93,19 @@
   ];
 
   /* ---------- 예측 포인트 ---------- */
-  const POINTS = { winner: 100, firstBreak: 50, gap: 100, design: 150, boss: 200, streakBonus: 50 };
+  const POINTS = { winner: 100, firstBreak: 50, gap: 100, design: 150, boss: 200, variable: 50, streakBonus: 50 };
+  // 만점 약 2,000 (변수 문항 포함) 기준으로 비율을 맞춘 등급 구간
   const GRADES = [
-    { min: 900, name: '바다를 읽는 자', emoji: '🔱' },
-    { min: 600, name: '노련한 서퍼',   emoji: '🏄' },
-    { min: 300, name: '해변 단골',     emoji: '🩴' },
-    { min: 0,   name: '파도 초보',     emoji: '🐚' },
+    { min: 1500, name: '바다를 읽는 자', emoji: '🔱' },
+    { min: 1100, name: '노련한 서퍼',   emoji: '🏄' },
+    { min: 700,  name: '해변 단골',     emoji: '🩴' },
+    { min: 0,    name: '파도 초보',     emoji: '🐚' },
   ];
 
   const lane = (wave, extra) => Object.assign({ wave }, extra || {});
+  /** "속도를 정하는 것은?" 변수 고르기 문항 (계산 없음, 개념 확인) */
+  const VARS = ['파장', '수심', '파고', '주기'];
+  const varBet = (q, answers, why) => ({ type: 'choice', points: POINTS.variable, q, options: VARS, answers: answers.map(a => VARS.indexOf(a)), why });
   const R1_LANES = () => [lane(WAVES.ripple), lane(WAVES.wind), lane(WAVES.long), lane(WAVES.swell)];
 
   /* ---------- 경기 ---------- */
@@ -111,11 +115,29 @@
     {
       id: 'r1', world: 'w1', no: 'R1', title: '개막전', length: L, bathy: COURSES.deep,
       lanes: R1_LANES(),
-      bets: [{ type: 'winner', points: POINTS.winner, q: '1위로 들어올 파도는?' }],
+      bets: [
+        { type: 'winner', points: POINTS.winner, q: '1위로 들어올 파도는?' },
+        varBet('이 코스에서 속도를 정하는 것은?', ['파장'], '수심은 네 레인 모두 200 m로 같았고, 파고도 모두 1 m였습니다. 다른 건 파장뿐.'),
+      ],
+      decider: { text: '파장', note: '수심(200 m)과 파고(1 m)는 모두 같았습니다' },
       cards: ['c1'], codex: ['ripple', 'wind', 'swell'],
     },
     {
-      id: 'r2', world: 'w1', no: 'R2', title: '접전', length: L, bathy: COURSES.deep,
+      id: 'rh', world: 'w1', no: 'R2', title: '파고 대결', length: L, bathy: COURSES.deep,
+      lanes: [
+        lane({ name: '낮은 파도', emoji: '🔹', lambda0: 100, H0: 0.5 }),
+        lane({ name: '보통 파도', emoji: '🔷', lambda0: 100, H0: 1.0 }),
+        lane({ name: '높은 파도', emoji: '🟦', lambda0: 100, H0: 2.0 }),
+      ],
+      bets: [
+        { type: 'choice', points: POINTS.winner, q: '파장은 모두 100 m, 파고만 0.5 / 1 / 2 m. 1위는?', options: ['낮은 파도', '보통 파도', '높은 파도', '동시 도착'], answers: [3], why: '심해파 속도는 파장이 정합니다. 파고가 달라도 파장이 같으면 속도가 같습니다.' },
+        varBet('파고를 키우면 속도는 어떻게 될까요? 속도를 정하는 것은?', ['파장'], '파고는 파도의 크기일 뿐, 속도와 무관합니다.'),
+      ],
+      decider: { text: '파장 (파고는 무관)', note: '파고 0.5 / 1 / 2 m가 동시에 들어왔습니다' },
+      cards: ['c1'], codex: [],
+    },
+    {
+      id: 'r2', world: 'w1', no: 'R3', title: '접전', length: L, bathy: COURSES.deep,
       lanes: [
         lane({ name: '선수 A', emoji: '🅰️', lambda0: 120, H0: 1 }),
         lane({ name: '선수 B', emoji: '🅱️', lambda0: 100, H0: 1 }),
@@ -123,10 +145,11 @@
         lane({ name: '선수 D', emoji: '🇩', lambda0: 60, H0: 1 }),
       ],
       bets: [{ type: 'winner', points: POINTS.winner, q: '1위로 들어올 선수는? (파장 차이가 작습니다)' }],
+      decider: { text: '파장', note: '파장 120·100·80·60 m — 차이가 작아 속도 차이도 작았습니다' },
       cards: ['c2'], codex: [], extra: 'deepFormula',
     },
     {
-      id: 'r3', world: 'w1', no: 'R3', title: '주기 미스터리', length: L, bathy: COURSES.deep,
+      id: 'r3', world: 'w1', no: 'R4', title: '주기 미스터리', length: L, bathy: COURSES.deep,
       lanes: [
         lane({ name: '선수 A', emoji: '🅰️', T: 14, H0: 1 }),
         lane({ name: '선수 B', emoji: '🅱️', T: 9, H0: 1 }),
@@ -134,41 +157,52 @@
         lane({ name: '선수 D', emoji: '🇩', T: 3, H0: 1 }),
       ],
       hideLambda: true,
-      bets: [{ type: 'winner', points: POINTS.winner, q: '파장은 비공개! 주기만 보고 1위를 고르세요.' }],
+      bets: [
+        { type: 'winner', points: POINTS.winner, q: '파장은 비공개! 주기만 보고 1위를 고르세요.' },
+        varBet('공개된 정보 중 속도를 알려 주는 것은?', ['주기', '파장'], '주기가 길면 파장도 깁니다. 주기를 보면 파장을 알 수 있고, 속도는 파장이 정합니다.'),
+      ],
+      decider: { text: '파장 (주기로 알 수 있음)', note: '주기가 길수록 파장이 길고, 파장이 길수록 빠릅니다' },
       cards: ['c3'], codex: [], extra: 'periodFormula',
     },
     {
-      id: 'r4', world: 'w2', no: 'R4', title: '해안 데뷔', length: L, bathy: COURSES.basic,
+      id: 'r4', world: 'w2', no: 'R5', title: '해안 데뷔', length: L, bathy: COURSES.basic,
       lanes: R1_LANES(),
       bets: [
         { type: 'winner', points: POINTS.winner, q: '1위로 들어올 파도는?' },
         { type: 'firstBreak', points: POINTS.firstBreak, q: '가장 먼저 부서질 파도는?' },
+        varBet('얕은 물에 들어간 뒤, 속도를 정하는 것은?', ['수심'], '얕은 물에선 파장이 달라도 모두 √(gh)로 느려집니다. 수심이 정합니다.'),
       ],
+      decider: { text: '앞바다에선 파장, 얕은 물에선 수심', note: '얕아지자 격차가 좁혀지고 모두 3.1 m/s로 수렴했습니다' },
       cards: ['c4', 'c5'], codex: ['breaker'],
     },
     {
-      id: 'r5', world: 'w2', no: 'R5', title: '같은 파도, 다른 바다', length: L,
+      id: 'r5', world: 'w2', no: 'R6', title: '같은 파도, 다른 바다', length: L,
       lanes: [
         lane({ name: '완만 레인', emoji: '🏖️', lambda0: 100, H0: 1 }, { bathy: COURSES.gentle, courseName: '600 m부터 얕아짐' }),
         lane({ name: '기본 레인', emoji: '🌴', lambda0: 100, H0: 1 }, { bathy: COURSES.basic, courseName: '1,800 m부터 얕아짐' }),
         lane({ name: '절벽 레인', emoji: '🪨', lambda0: 100, H0: 1 }, { bathy: COURSES.cliff, courseName: '2,700 m부터 얕아짐' }),
         lane({ name: '사주 레인', emoji: '🏝️', lambda0: 100, H0: 1 }, { bathy: COURSES.sandbar, courseName: '중간에 수심 5 m 언덕' }),
       ],
-      bets: [{ type: 'winner', points: POINTS.winner, q: '네 파도 모두 파장 100 m. 어느 바다가 1위일까요?' }],
+      bets: [
+        { type: 'winner', points: POINTS.winner, q: '네 파도 모두 파장 100 m. 어느 바다가 1위일까요?' },
+        varBet('이 경기에서 순위를 가른 것은?', ['수심'], '파장·파고·주기는 네 레인 모두 같았습니다. 다른 건 바다의 수심뿐.'),
+      ],
+      decider: { text: '수심', note: '파장(100 m)·파고(1 m)는 모두 같았습니다' },
       cards: ['c6'], codex: [],
     },
     {
-      id: 'r6', world: 'w2', no: 'R6', title: '격차 예측', length: L,
+      id: 'r6', world: 'w2', no: 'R7', title: '격차 예측', length: L,
       lanes: [lane(WAVES.swell), lane(WAVES.ripple)],
       heats: [
         { label: '1차전 · 완만한 해안', short: '완만한 해안', bathy: COURSES.gentle },
         { label: '2차전 · 절벽 해안', short: '절벽 해안', bathy: COURSES.cliff },
       ],
       bets: [{ type: 'gap', points: POINTS.gap, q: '너울과 잔물결의 도착 시간 차가 더 큰 해안은?', options: ['완만한 해안 (600 m부터 얕아짐)', '절벽 해안 (2,700 m부터 얕아짐)'] }],
+      decider: { text: '깊은 구간의 길이', note: '격차는 파장이 정하는 깊은 구간에서만 벌어집니다' },
       cards: [], codex: [],
     },
     {
-      id: 'r7', world: 'w3', no: 'R7', title: '의뢰: 너울을 이기게 하라', length: L,
+      id: 'r7', world: 'w3', no: 'R8', title: '의뢰: 너울을 이기게 하라', length: L,
       lanes: [lane(WAVES.swell), lane(WAVES.ripple, { start: 500 })],
       design: { goal: 'swellWins', initial: { xs: 100, hmid: 1, sandbar: false },
                 brief: '잔물결이 500 m 앞에서 출발합니다(핸디캡). 너울이 따라잡아 1위 하도록 코스를 설계하세요.',
@@ -176,7 +210,7 @@
       bets: [], cards: ['c7'], codex: [],
     },
     {
-      id: 'r8', world: 'w3', no: 'R8', title: '의뢰: 잔물결을 지키게 하라', length: L,
+      id: 'r8', world: 'w3', no: 'R9', title: '의뢰: 잔물결을 지키게 하라', length: L,
       lanes: [lane(WAVES.swell), lane(WAVES.ripple, { start: 500 })],
       design: { goal: 'rippleWins', initial: { xs: 2000, hmid: 20, sandbar: false },
                 brief: '같은 핸디캡(잔물결 500 m 앞 출발). 이번엔 잔물결이 1위를 지키도록 설계하세요.',
@@ -184,7 +218,7 @@
       bets: [], cards: ['c7'], codex: [],
     },
     {
-      id: 'r9', world: 'w3', no: 'R9', title: '의뢰: 서핑 대회장', length: L,
+      id: 'r9', world: 'w3', no: 'R10', title: '의뢰: 서핑 대회장', length: L,
       lanes: [lane(WAVES.swell), lane(WAVES.ripple, { start: 500 })],
       design: { goal: 'breakWindow', window: [2600, 2800], initial: { xs: 1200, hmid: 10, sandbar: false },
                 brief: '너울이 결승선 앞 300 ± 100 m 구간(2,600~2,800 m)에서 부서지게 설계하세요.',
@@ -195,7 +229,11 @@
       id: 'boss', world: 'boss', no: 'BOSS', title: '쓰나미 특별전', length: 17000000, bathy: COURSES.pacific,
       lanes: [lane(WAVES.tsunami), lane(WAVES.swell)],
       timeScale: 3600, step: 60, endOnFirst: true, clock: true, hPx: 24, scaleNote: '가로 17,000 km · 세로 4 km — 단면은 극단적으로 압축됨',
-      bets: [{ type: 'choice', points: POINTS.boss, q: '쓰나미가 일본에 도착하는 데 걸리는 시간은?', options: ['2시간', '6시간', '약 하루', '3일'], answer: 2 }],
+      bets: [
+        { type: 'choice', points: POINTS.boss, q: '쓰나미가 일본에 도착하는 데 걸리는 시간은?', options: ['2시간', '6시간', '약 하루', '3일'], answers: [2] },
+        varBet('수심 4,000 m 태평양에서 쓰나미의 속도를 정하는 것은?', ['수심'], '파장 200 km 앞에선 4,000 m도 얕은 물(h/λ = 1/50). 천해파이므로 수심이 정합니다.'),
+      ],
+      decider: { text: '수심 (태평양에서도 천해파)', note: '파장이 200 km라 4,000 m도 얕은 물입니다' },
       cards: ['c8'], codex: ['tsunami'],
     },
   ];

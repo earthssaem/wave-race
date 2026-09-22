@@ -146,7 +146,9 @@
       pre.completeAll(step, 5e6);
       const ft = l => (l.finishTime == null ? Infinity : l.finishTime);
       const ranked = pre.lanes.slice().sort((a, b) => ft(a) - ft(b));
-      ranked.forEach((l, i) => { if (l.rank == null) l.rank = i + 1; });
+      // 동시 도착(0.5초 이내)은 같은 순위
+      ranked.forEach((l, i) => { l.rank = (i > 0 && Math.abs(ft(l) - ft(ranked[i - 1])) < 0.5) ? ranked[i - 1].rank : i + 1; l.tie = false; });
+      ranked.forEach(l => { l.tie = ranked.filter(o => o.rank === l.rank).length > 1; });
       const winnerTime = ft(ranked[0]);
       const lastTime = Math.max(...ranked.map(l => (isFinite(ft(l)) ? ft(l) : winnerTime)));
       const timeScale = race.timeScale || Math.max(1, winnerTime / 15);
@@ -433,12 +435,14 @@
           let best = 0, bestGap = -1;
           plan.heats.forEach((h, i) => { const g = h.lastTime - h.winnerTime; if (g > bestGap) { bestGap = g; best = i; } });
           answer = best;
-        } else if (bet.type === 'choice') answer = bet.answer;
-        const correct = answer != null && choice === answer;
+        } else if (bet.type === 'choice') answer = bet.answers ? bet.answers[0] : bet.answer;
+        const okSet = bet.answers || (answer != null ? [answer] : []);
+        const correct = choice != null && okSet.includes(choice);
         const pts = correct && official ? bet.points : 0;
         out.gained += pts;
         if (official) this.bumpStreak(out, correct);
-        out.bets.push({ bet, choice, answer, correct, points: pts, choiceLabel: options[choice] ? options[choice].name : '—', answerLabel: options[answer] ? options[answer].name : '—',
+        out.bets.push({ bet, choice, answer, correct, points: pts, choiceLabel: options[choice] ? options[choice].name : '—',
+          answerLabel: okSet.map(a => options[a] ? options[a].name : '—').join(' 또는 '),
           explain: betExplain(race, plan, bet, choice, answer) });
       });
       return out;
@@ -460,6 +464,12 @@
 
       // 베팅 결과
       const betPanel = el('div', { class: 'panel' }, el('h2', {}, official ? '정산' : '시운전 결과'));
+      if (race.decider) {
+        betPanel.appendChild(el('div', { class: 'decider' },
+          el('span', { class: 'decider-label' }, '이번 경기에서 속도를 정한 것'),
+          el('span', { class: 'decider-text' }, race.decider.text),
+          race.decider.note ? el('span', { class: 'decider-note' }, race.decider.note) : null));
+      }
       if (res.design) {
         const d = res.design;
         betPanel.appendChild(el('div', { class: 'bet-result ' + (d.ok ? 'ok' : 'bad') },
@@ -488,7 +498,7 @@
           const unfinishedBoss = race.endOnFirst && ln.rank > 1;
           const timeCell = unfinishedBoss ? `아직 태평양 한가운데… (예상 ${fmtTime(ln.finishTime)})` : (ln.finishTime == null ? '미도착' : fmtTime(ln.finishTime));
           tb.appendChild(el('tr', { class: ln.rank === 1 ? 'first' : '' },
-            el('td', { class: 'rank' }, `${ln.rank}위`),
+            el('td', { class: 'rank' }, ln.tie ? `${ln.rank}위 (동시)` : `${ln.rank}위`),
             el('td', {}, `${ln.wave.emoji || ''} ${ln.wave.name}`),
             el('td', { class: 'num' }, timeCell),
             el('td', { class: 'num' }, `${fmtSpeed(ln.maxC)} → ${fmtSpeed(ln.minC)}`),
@@ -497,7 +507,8 @@
         tbl.appendChild(tb);
         panel.appendChild(el('div', { class: 'table-wrap' }, tbl));
         if (plan.heats.length > 1) panel.appendChild(el('p', { class: 'muted' }, `도착 시간 차: ${fmtTime(h.lastTime - h.winnerTime)}`));
-        panel.appendChild(resultsExtra(race, h));
+        const extra = resultsExtra(race, h);
+        if (extra.childNodes.length) panel.appendChild(el('details', { class: 'formula-details' }, el('summary', {}, '공식으로 확인하기'), extra));
         app.appendChild(panel);
       });
 
@@ -514,8 +525,8 @@
             if (!entry) {
               progress.codex[cid] = { race: race.id, summary, entries: race.design ? { [race.id]: summary } : undefined };
               res.newCards.push(cid);
-            } else if (race.design) {
-              // 설계 의뢰 카드 ⑦: 의뢰마다 기록을 누적한다
+            } else if (entry.race !== race.id) {
+              // 같은 카드를 여러 경기가 채우면(⑦ 설계 의뢰, ① 파고 대결) 기록을 누적한다
               entry.entries = entry.entries || { [entry.race]: entry.summary };
               if (!entry.entries[race.id]) { entry.entries[race.id] = summary; res.updatedCards.push(cid); }
             }
@@ -557,7 +568,7 @@
         if (O.has('settle', race.id)) Caster.event(line('settle', null, race.id), 6000);
         if (res.newCards.length || res.newCodex.length) Caster.event(line('codex'), 3000);
       }
-      if (res.design && official && res.design.ok && (res.newCards.length || res.updatedCards.length)) Caster.event(line('codex'), 3000);
+      if (official && res.updatedCards.length && !res.newCards.length) Caster.event(line('codex'), 3000);
       if (!official) Caster.say(line('testRun') + ' ' + (res.design ? res.design.detail : ''));
 
       // 행동 버튼
@@ -628,6 +639,7 @@
       if (answer != null) parts.push('정답 ' + laneLine(answer));
       return parts.join(' · ');
     }
+    if (bet.why) return bet.why;
     if (bet.type === 'gap') return plan.heats.map(hh => `${hh.short}: 격차 ${fmtTime(hh.lastTime - hh.winnerTime)}`).join(' · ');
     if (bet.type === 'choice' && race.id === 'boss') {
       const ts = h.pre.lanes.reduce((a, b) => (b.maxC > a.maxC ? b : a));
@@ -643,7 +655,8 @@
     const h = plan.heats[0];
     const w = h.ranked[0], l = h.ranked[h.ranked.length - 1];
     let s = `1위 ${w.wave.name} ${fmtTime(w.finishTime)}`;
-    if (h.ranked.length > 1) s += ` · 꼴찌 ${l.wave.name} ${race.endOnFirst ? '약 ' : ''}${fmtTime(l.finishTime)}`;
+    if (w.tie) s = `${h.ranked.filter(x => x.rank === 1).map(x => x.wave.name).join('·')} 동시 도착 ${fmtTime(w.finishTime)}`;
+    else if (h.ranked.length > 1) s += ` · 꼴찌 ${l.wave.name} ${race.endOnFirst ? '약 ' : ''}${fmtTime(l.finishTime)}`;
     const broke = h.pre.lanes.filter(x => x.brokenT != null).sort((a, b) => a.brokenT - b.brokenT)[0];
     if (broke) s += ` · 먼저 부서짐 ${broke.wave.name} (${fmtNum(broke.brokenAt)} m)`;
     if (plan.heats.length > 1) s = plan.heats.map(hh => `${hh.short}: 격차 ${fmtTime(hh.lastTime - hh.winnerTime)}`).join(' · ');
@@ -715,7 +728,7 @@
           cell.appendChild(el('span', { class: 'desc' }, cd.line));
           if (got.entries) {
             const ul = el('ul', { class: 'entry-list' });
-            Object.keys(got.entries).forEach(rid => ul.appendChild(el('li', {}, got.entries[rid])));
+            Object.keys(got.entries).forEach(rid => { const rr = R.byId(rid); ul.appendChild(el('li', {}, `${rr ? rr.no + ' · ' : ''}${got.entries[rid]}`)); });
             cell.appendChild(ul);
           } else cell.appendChild(el('span', { class: 'summary' }, `등록 경기 ${R.byId(got.race).no} · ${got.summary}`));
         } else cell.appendChild(el('span', { class: 'desc' }, '잠김 — 경기를 마치면 뒤집힙니다.'));
@@ -767,7 +780,7 @@
       el('div', { class: 'grade-emoji' }, grade.emoji),
       el('div', { class: 'grade' }, grade.name),
       el('p', {}, '예측 포인트 ', el('b', { class: 'num', style: 'font-size:28px;color:var(--coral-2)' }, fmtNum(pts))),
-      el('p', { class: 'muted' }, '0~299 파도 초보 · 300~599 해변 단골 · 600~899 노련한 서퍼 · 900+ 바다를 읽는 자'),
+      el('p', { class: 'muted' }, R.GRADES.slice().reverse().map((g, i, arr) => `${g.min}${arr[i + 1] ? '~' + (arr[i + 1].min - 1) : '+'} ${g.name}`).join(' · ')),
       session.results.length < R.RACES.length ? el('p', { class: 'muted' }, `이번 세션에서 치른 ${session.results.length}경기 기준입니다. 이어하기 이전 경기는 포함되지 않습니다.`) : null));
     if (session.results.length) app.appendChild(el('div', { class: 'panel' }, el('h3', {}, '이번 세션 경기 기록'), ul));
     Caster.say(line('final'));
