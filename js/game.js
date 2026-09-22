@@ -6,59 +6,8 @@
   'use strict';
 
   const P = window.Physics, R = window.Races, O = window.Otter;
-  const SVG_NS = 'http://www.w3.org/2000/svg';
-  const reduceMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
-  const $ = (sel, root) => (root || document).querySelector(sel);
-
-  /* ---------- 유틸 ---------- */
-  function esc(s) {
-    return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  }
-  function el(tag, attrs, ...children) {
-    const e = document.createElement(tag);
-    if (attrs) for (const k in attrs) {
-      if (k === 'class') e.className = attrs[k];
-      else if (k === 'html') e.innerHTML = attrs[k];
-      else if (k.startsWith('on')) e.addEventListener(k.slice(2), attrs[k]);
-      else if (attrs[k] != null) e.setAttribute(k, attrs[k]);
-    }
-    for (const c of children) if (c != null) e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
-    return e;
-  }
-  function svgEl(tag, attrs, parent) {
-    const e = document.createElementNS(SVG_NS, tag);
-    if (attrs) for (const k in attrs) if (attrs[k] != null) e.setAttribute(k, attrs[k]);
-    if (parent) parent.appendChild(e);
-    return e;
-  }
-  const fmtNum = n => Math.round(n).toLocaleString('ko-KR');
-  function fmtTime(sec) {
-    if (sec == null || !isFinite(sec)) return '—';
-    const s = Math.round(sec);
-    if (s < 60) return `${s}초`;
-    if (s < 3600) return `${Math.floor(s / 60)}분 ${s % 60}초`;
-    if (s < 86400) return `${Math.floor(s / 3600)}시간 ${Math.floor((s % 3600) / 60)}분`;
-    return `${Math.floor(s / 86400)}일 ${Math.floor((s % 86400) / 3600)}시간`;
-  }
-  function fmtClock(sec) {
-    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
-    return `${h}시간 ${String(m).padStart(2, '0')}분`;
-  }
-  function fmtSpeed(c) {
-    if (c >= 50) return `${Math.round(c)} m/s`;
-    return `${c.toFixed(1)} m/s`;
-  }
-  function fmtDist(m) {
-    if (m >= 100000) return `${fmtNum(m / 1000)} km`;
-    return `${fmtNum(m)} m`;
-  }
-  function fmtDepth(h) {
-    if (h >= 1000) return `${fmtNum(h / 1000)} km`;
-    if (h >= 10) return `${Math.round(h)} m`;
-    return `${(Math.round(h * 10) / 10)} m`;
-  }
-  const wait = ms => new Promise(res => setTimeout(res, ms));
-  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const { reduceMotion, $, esc, el, svgEl, fmtNum, fmtTime, fmtSpeed, fmtDist, fmtDepth, wait, clamp, courseSVG } = window.WRUI;
+  const RaceView = window.RaceView;
 
   /* ---------- 저장 (도감·진행도만) ---------- */
   const STORE_KEY = 'waveRace.progress.v1';
@@ -91,11 +40,16 @@
 
   $('#btnHome').addEventListener('click', () => { Flow.abort(); showTitle(); });
   $('#btnCodex').addEventListener('click', () => { const back = Flow.current ? () => Flow.current.resume() : showTitle; showCodex(back); });
-  $('#btnTheme').addEventListener('click', () => {
-    const root = document.documentElement;
-    const dark = root.getAttribute('data-theme') !== 'dark';
-    root.setAttribute('data-theme', dark ? 'dark' : 'light');
+  const THEME_KEY = 'waveRace.theme';
+  function applyTheme(dark) {
+    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
     $('#btnTheme').textContent = dark ? '☀️' : '🌙';
+  }
+  try { applyTheme(localStorage.getItem(THEME_KEY) === 'dark'); } catch (e) { /* 무시 */ }
+  $('#btnTheme').addEventListener('click', () => {
+    const dark = document.documentElement.getAttribute('data-theme') !== 'dark';
+    applyTheme(dark);
+    try { localStorage.setItem(THEME_KEY, dark ? 'dark' : 'light'); } catch (e) { /* 무시 */ }
   });
 
   function setTopbar(worldName, raceName) {
@@ -105,6 +59,13 @@
   function setChrome({ top = true, caster = true } = {}) {
     topbar.hidden = !top;
     casterBar.hidden = !caster;
+    lockCodex(false);
+  }
+  /** 경기 중에는 도감을 열 수 없다 (레이스 루프가 뒤에서 계속 돌지 않도록) */
+  function lockCodex(lock) {
+    const b = $('#btnCodex');
+    b.disabled = !!lock;
+    b.title = lock ? '경기 중에는 열 수 없습니다' : '';
   }
   function setActions(...buttons) {
     actionsEl.innerHTML = '';
@@ -169,261 +130,6 @@
     overlay.innerHTML = '';
   }
 
-  /* ---------- 코스 단면 SVG (패독·편집기·도감용) ---------- */
-  function depthMapper(hMax, y0, yMax) {
-    const denom = Math.log(1 + hMax / 0.5);
-    const span = yMax - y0 - 6;
-    return h => y0 + 6 + span * Math.log(1 + Math.max(h, 0) / 0.5) / denom;
-  }
-  function courseSVG(bathy, length, opts = {}) {
-    const vw = 1000, vh = opts.vh || 160, pad = 14, y0 = Math.round(vh * 0.3);
-    const svg = svgEl('svg', { viewBox: `0 0 ${vw} ${vh}`, class: opts.class || 'course-svg', role: 'img', 'aria-label': '코스 단면' });
-    const hMax = P.maxDepth(bathy);
-    const yOf = depthMapper(hMax, y0, vh);
-    const px = x => pad + x / length * (vw - 2 * pad);
-    svgEl('rect', { x: 0, y: y0, width: vw, height: vh - y0, fill: 'var(--sea)' }, svg);
-    let d = `M0,${vh} L0,${yOf(bathy[0][1])}`;
-    for (let x = 0; x <= length; x += length / 200) d += ` L${px(x).toFixed(1)},${yOf(P.depthAt(bathy, x)).toFixed(1)}`;
-    d += ` L${vw},${yOf(bathy[bathy.length - 1][1]).toFixed(1)} L${vw},${vh} Z`;
-    svgEl('path', { d, fill: 'var(--sand)', stroke: 'var(--sand-3)', 'stroke-width': 1.5 }, svg);
-    svgEl('line', { x1: 0, y1: y0, x2: vw, y2: y0, stroke: 'var(--sea-deep)', 'stroke-width': 1.5 }, svg);
-    svgEl('line', { x1: px(length), y1: y0 - 12, x2: px(length), y2: vh, class: 'finish', stroke: 'var(--coral)', 'stroke-width': 3, 'stroke-dasharray': '8 6' }, svg);
-    if (opts.window) {
-      const [a, b] = opts.window;
-      svgEl('rect', { x: px(a), y: y0 - 12, width: px(b) - px(a), height: vh - y0 + 12, fill: 'var(--sun)', opacity: .35 }, svg);
-      const t = svgEl('text', { x: (px(a) + px(b)) / 2, y: y0 - 16, 'text-anchor': 'middle', 'font-size': 12, fill: 'var(--coral-2)', 'font-family': 'Jua, sans-serif' }, svg);
-      t.textContent = '목표 쇄파 구간';
-    }
-    if (opts.startLine) {
-      svgEl('line', { x1: px(opts.startLine), y1: y0 - 10, x2: px(opts.startLine), y2: vh, stroke: 'var(--ink-2)', 'stroke-width': 2, 'stroke-dasharray': '4 4' }, svg);
-    }
-    // 수심 눈금(최소한): 시작·끝 수심
-    const t1 = svgEl('text', { x: 8, y: yOf(bathy[0][1]) - 4, 'font-size': 12, fill: 'var(--ink-2)', 'font-family': 'Noto Sans KR, sans-serif' }, svg);
-    t1.textContent = `수심 ${fmtDepth(bathy[0][1])}`;
-    const t2 = svgEl('text', { x: vw - 8, y: yOf(bathy[bathy.length - 1][1]) - 4, 'text-anchor': 'end', 'font-size': 12, fill: 'var(--ink-2)', 'font-family': 'Noto Sans KR, sans-serif' }, svg);
-    t2.textContent = `${fmtDepth(bathy[bathy.length - 1][1])}`;
-    const t3 = svgEl('text', { x: px(length) - 8, y: y0 - 6, 'text-anchor': 'end', 'font-size': 12, fill: 'var(--ink-2)', 'font-family': 'Noto Sans KR, sans-serif' }, svg);
-    t3.textContent = `${fmtDist(length)} 결승선`;
-    return svg;
-  }
-
-  /* ============================================================
-   * 레이스 화면 (레인 · 파열 · 깃발 · 뱃지 · 격차 미터)
-   * ============================================================ */
-  function laneSpecText(race, laneSpec, wave) {
-    const parts = [];
-    if (race.hideLambda) parts.push(`T = ${laneSpec.wave.T} s`);
-    else parts.push(`λ₀ ${fmtDist(wave.lambda0)}`);
-    if (laneSpec.courseName) parts.push(laneSpec.courseName);
-    return parts.join(' · ');
-  }
-  const REGIME_LABEL = { deep: '심해파', transition: '천이 구간', shallow: '천해파', broken: '쇄파', finished: '골인' };
-
-  class RaceView {
-    constructor(container, race, heat, sim) {
-      this.container = container; this.race = race; this.heat = heat; this.sim = sim;
-      this.lanes = [];
-      this.gapHistory = [];
-      this.maxGap = 0;
-      this.lastHeadUpdate = 0;
-      this.build();
-      this._onResize = () => { clearTimeout(this._rt); this._rt = setTimeout(() => this.rebuildSVGs(), 150); };
-      window.addEventListener('resize', this._onResize);
-    }
-    destroy() { window.removeEventListener('resize', this._onResize); clearTimeout(this._rt); }
-
-    build() {
-      const race = this.race, heat = this.heat;
-      const top = el('div', { class: 'race-top' });
-      if (heat.label) top.appendChild(el('div', { class: 'heat-label' }, heat.label));
-      this.gapEl = el('div', { class: 'gap-meter', role: 'status' },
-        el('span', { class: 'label' }, '격차 미터'),
-        el('div', { class: 'bar' }, el('i')),
-        el('span', { class: 'val' }, '0 m'));
-      this.gapBar = $('.bar > i', this.gapEl); this.gapVal = $('.val', this.gapEl);
-      top.appendChild(this.gapEl);
-      if (race.clock) { this.clockEl = el('div', { class: 'race-clock num' }, '경과 0시간 00분'); top.appendChild(this.clockEl); }
-      this.container.appendChild(top);
-      if (race.scaleNote) this.container.appendChild(el('div', { class: 'scale-note' }, race.scaleNote));
-      const lanesEl = el('div', { class: 'lanes' });
-      lanesEl.style.setProperty('--lane-count', String(this.sim.lanes.length));
-      this.container.appendChild(lanesEl);
-      this.sim.lanes.forEach((ln, i) => {
-        const spec = heat.lanes[i];
-        const head = el('div', { class: 'lane-head' },
-          el('span', { class: 'emoji' }, ln.wave.emoji || '🌊'),
-          el('span', { class: 'name' }, ln.wave.name),
-          el('span', { class: 'spec' }, laneSpecText(race, spec, ln.wave) + (spec.start ? ` · ${fmtNum(spec.start)} m 앞 출발` : '')),
-          el('span', { class: 'stat' }, el('span', { class: 'badge deep' }, '심해파'), el('span', { class: 'speed num' }, '')));
-        const laneEl = el('div', { class: 'lane' }, head);
-        lanesEl.appendChild(laneEl);
-        const lv = { ln, spec, laneEl, badge: $('.badge', head), speed: $('.speed', head), svg: null };
-        this.lanes.push(lv);
-      });
-      this.rebuildSVGs();
-    }
-
-    rebuildSVGs() {
-      for (const lv of this.lanes) {
-        if (lv.svg) lv.svg.remove();
-        this.buildLaneSVG(lv);
-      }
-      this.draw(performance.now(), true);
-    }
-
-    buildLaneSVG(lv) {
-      const { ln } = lv;
-      const svg = svgEl('svg', { class: 'lane-svg', 'aria-hidden': 'true' });
-      lv.laneEl.appendChild(svg);
-      const cssW = Math.max(200, svg.clientWidth || 800), cssH = Math.max(60, svg.clientHeight || 150);
-      const vw = 1000, vh = Math.round(vw * cssH / cssW);
-      svg.setAttribute('viewBox', `0 0 ${vw} ${vh}`);
-      const pad = 14, L = this.sim.length;
-      const pxPerM = (vw - 2 * pad) / L;
-      const y0 = Math.round(vh * 0.42);
-      const hPx = (this.race.hPx || 14) * (vh / 187);      // 파고 1 m당 px
-      const lminUnits = 22 * vw / cssW;                     // 화면상 최소 파장(약 22 css px)
-      const hMax = P.maxDepth(ln.bathy);
-      const yOf = depthMapper(hMax, y0, vh);
-      const xToPx = x => pad + x * pxPerM;
-      // 룩업 테이블 (2 단위 간격)
-      const n = Math.floor(vw / 2) + 1;
-      const kDisp = new Float32Array(n), Hpx = new Float32Array(n), brokenAmp = new Float32Array(n);
-      for (let i = 0; i < n; i++) {
-        const X = clamp((2 * i - pad) / pxPerM, 0, L);
-        const h = P.depthAt(ln.bathy, X);
-        const st = P.waveState(ln.wave, h);
-        const lamPx = Math.max(st.lambda * pxPerM, lminUnits);
-        kDisp[i] = P.TWO_PI / lamPx;
-        Hpx[i] = Math.min(st.H, P.BREAK_RATIO * h) * hPx;
-        brokenAmp[i] = P.BREAK_RATIO * h * hPx * 0.5 * 0.75;
-      }
-      lv.geom = { vw, vh, pad, pxPerM, y0, hPx, xToPx, kDisp, Hpx, brokenAmp, n, yOf };
-
-      // 물 → 해수면 선 → 거품 → 모래 → 선 → 깃발
-      lv.water = svgEl('path', { class: 'water' }, svg);
-      lv.surface = svgEl('path', { class: 'surface' }, svg);
-      lv.foam = svgEl('path', { class: 'foam' }, svg);
-      lv.foamDots = svgEl('path', { class: 'foam-dots' }, svg);
-      let d = `M0,${vh} L0,${yOf(P.depthAt(ln.bathy, 0)).toFixed(1)}`;
-      for (let px = 0; px <= vw; px += 4) {
-        const X = clamp((px - pad) / pxPerM, 0, L);
-        d += ` L${px},${yOf(P.depthAt(ln.bathy, X)).toFixed(1)}`;
-      }
-      d += ` L${vw},${vh} Z`;
-      svgEl('path', { class: 'sand', d }, svg);
-      if (this.race.design && this.race.design.window && ln.wave.name === '너울') {
-        const [a, b] = this.race.design.window;
-        svgEl('rect', { class: 'window', x: xToPx(a), y: 0, width: xToPx(b) - xToPx(a), height: vh }, svg);
-      }
-      if (ln.start > 0) svgEl('line', { class: 'start', x1: xToPx(ln.start), y1: 4, x2: xToPx(ln.start), y2: vh }, svg);
-      svgEl('line', { class: 'finish', x1: xToPx(L), y1: 4, x2: xToPx(L), y2: vh }, svg);
-      const t1 = svgEl('text', { class: 'tick', x: 4, y: vh - 4 }, svg); t1.textContent = fmtDepth(P.depthAt(ln.bathy, 0));
-      const t2 = svgEl('text', { class: 'tick', x: vw - 4, y: vh - 4, 'text-anchor': 'end' }, svg); t2.textContent = fmtDepth(P.depthAt(ln.bathy, L));
-      lv.fx = svgEl('g', {}, svg);
-      const flag = svgEl('g', { class: 'flag' }, svg);
-      svgEl('line', { class: 'flag-pole', x1: 0, y1: 0, x2: 0, y2: -34 }, flag);
-      svgEl('path', { class: 'flag-cloth', d: 'M0,-34 L24,-27 L0,-20 Z' }, flag);
-      const fe = svgEl('text', { class: 'flag-emoji', x: -9, y: -38 }, flag); fe.textContent = ln.wave.emoji || '🌊';
-      lv.flag = flag;
-      lv.svg = svg;
-    }
-
-    drawLane(lv) {
-      const { ln, geom } = lv;
-      const { vw, vh, y0, xToPx, kDisp, Hpx, brokenAmp, n } = geom;
-      const frontPx = xToPx(ln.x);
-      const tailPx = xToPx(ln.start);
-      const brokenPx = ln.broken ? xToPx(ln.brokenAt) : Infinity;
-      const STEP = 2;
-      const pts = [];
-      let foam = '', foamStarted = false;
-      let phase = 0;
-      let crestY = y0;
-      for (let px = frontPx; px >= tailPx - 0.001; px -= STEP) {
-        const i = clamp(Math.round(px / 2), 0, n - 1);
-        const isBroken = px >= brokenPx;
-        let A = isBroken ? brokenAmp[i] : Hpx[i] / 2;
-        const taper = Math.min(1, (px - tailPx + STEP) / 40);
-        A = Math.min(A * taper, y0 - 6);
-        const y = y0 - A * Math.cos(phase);
-        if (px === frontPx) crestY = y;
-        pts.push(px.toFixed(1) + ',' + y.toFixed(1));
-        if (isBroken) { foam += (foamStarted ? ' L' : 'M') + px.toFixed(1) + ',' + y.toFixed(1); foamStarted = true; }
-        phase += kDisp[i] * STEP;
-      }
-      pts.reverse();
-      const surf = pts.length ? 'M' + pts.join(' L') : '';
-      lv.water.setAttribute('d', `M0,${y0} L${tailPx.toFixed(1)},${y0} ${pts.length ? 'L' + pts.join(' L') : ''} L${vw},${y0} L${vw},${vh} L0,${vh} Z`);
-      lv.surface.setAttribute('d', `M0,${y0} L${tailPx.toFixed(1)},${y0} ${pts.length ? 'L' + pts.join(' L') : ''} L${vw},${y0}`);
-      lv.foam.setAttribute('d', foam);
-      lv.foamDots.setAttribute('d', foam);
-      lv.flag.setAttribute('transform', `translate(${frontPx.toFixed(1)},${crestY.toFixed(1)})`);
-      void surf;
-    }
-
-    draw(now, force) {
-      for (const lv of this.lanes) this.drawLane(lv);
-      // 격차 미터
-      const gap = this.sim.gap();
-      if (gap > this.maxGap) this.maxGap = gap;
-      this.gapBar.style.width = Math.min(100, gap / this.sim.length * 100).toFixed(1) + '%';
-      this.gapHistory.push({ t: now, gap });
-      while (this.gapHistory.length > 40 && now - this.gapHistory[0].t > 700) this.gapHistory.shift();
-      const old = this.gapHistory[0];
-      let trend = '';
-      if (old && now - old.t > 300) {
-        if (gap > old.gap + this.sim.length * 0.002) trend = ' <span class="trend open">▲ 벌어짐</span>';
-        else if (gap < old.gap - this.sim.length * 0.002) trend = ' <span class="trend close">▼ 좁혀짐</span>';
-      }
-      this.gapVal.innerHTML = esc(fmtDist(gap)) + trend;
-      if (this.clockEl) this.clockEl.textContent = '경과 ' + fmtClock(this.sim.t);
-      if (force || now - this.lastHeadUpdate > 120) {
-        this.lastHeadUpdate = now;
-        for (const lv of this.lanes) {
-          const ln = lv.ln;
-          const reg = ln.finished ? 'finished' : ln.regime;
-          lv.badge.className = 'badge ' + reg;
-          lv.badge.textContent = REGIME_LABEL[reg] || reg;
-          if (ln.finished) lv.speed.innerHTML = `<small>${ln.rank}위</small> ${esc(fmtTime(ln.finishTime))}`;
-          else lv.speed.innerHTML = esc(fmtSpeed(ln.c)) + (ln.c >= 50 ? `<br><small>${fmtNum(ln.c * 3.6)} km/h</small>` : '');
-        }
-      }
-    }
-
-    wipeout(ln) {
-      const lv = this.lanes[ln.index]; if (!lv) return;
-      const { xToPx, y0 } = lv.geom;
-      const x = xToPx(ln.brokenAt);
-      const g = svgEl('g', {}, lv.fx);
-      const t = svgEl('text', { class: 'wipeout' + (reduceMotion ? '' : ' wipeout-anim'), x: Math.min(x, lv.geom.vw - 150), y: y0 - 30, 'text-anchor': 'middle' }, g);
-      t.setAttribute('x', clamp(x, 90, lv.geom.vw - 90));
-      t.textContent = '🏄 WIPEOUT!';
-      t.style.transformOrigin = `${clamp(x, 90, lv.geom.vw - 90)}px ${y0 - 30}px`;
-      for (let i = 0; i < 8; i++) {
-        const c = svgEl('circle', { class: 'bubble' + (reduceMotion ? '' : ' bubble-anim'), cx: x + (Math.random() - 0.5) * 50, cy: y0 - 4 - Math.random() * 14, r: 3 + Math.random() * 5 }, g);
-        c.style.transformOrigin = `${c.getAttribute('cx')}px ${c.getAttribute('cy')}px`;
-      }
-      if (!reduceMotion) { lv.laneEl.classList.remove('shake'); void lv.laneEl.offsetWidth; lv.laneEl.classList.add('shake'); }
-      setTimeout(() => g.remove(), 1800);
-    }
-
-    spray(ln) {
-      const lv = this.lanes[ln.index]; if (!lv) return;
-      const { xToPx, y0, vw } = lv.geom;
-      const x = xToPx(this.sim.length);
-      const g = svgEl('g', {}, lv.fx);
-      for (let i = 0; i < 14; i++) {
-        const c = svgEl('circle', { class: 'spray' + (reduceMotion ? '' : ' spray-anim'), cx: x - 6 + (Math.random() - 0.5) * 20, cy: y0 - 6, r: 2 + Math.random() * 4 }, g);
-        c.style.setProperty('--dx', `${(Math.random() - 0.5) * 60}px`);
-        c.style.setProperty('--dy', `${-20 - Math.random() * 50}px`);
-      }
-      if (ln.rank === 1) lv.laneEl.classList.add('winner');
-      void vw;
-      setTimeout(() => g.remove(), 1000);
-    }
-  }
-
   /* ============================================================
    * 경기 계획 (사전 계산: 결과·배속은 결정적)
    * ============================================================ */
@@ -480,6 +186,7 @@
       else if (this.stage === 'bet') this.showBet();
       else if (this.stage === 'editor') this.showEditor();
       else if (this.stage === 'results' && this.lastResults) this.showResults(this.lastResults);
+      else if (this.stage === 'race') { /* 경기 중엔 도감이 잠기므로 도달하지 않음 */ }
       else this.begin();
     }
 
@@ -585,14 +292,17 @@
         let ended = false, finished = false, rafId = 0;
         let last = 0, acc = 0, ramp = 1, rampTarget = 1;
         let slomoUntil = 0, firstFinishReal = null, startReal = 0;
-        let saidLead = false, saidGap = false, gapPeak = 0, lastLaneEventAt = 0;
+        let saidLead = false, saidGap = false, gapPeak = 0, lastLaneEventAt = 0, breakCount = 0;
         const shallowSaid = new Set();
         const raceId = race.id;
+        const timedLines = O.timed(raceId);
+        lockCodex(true);
 
         const finish = (skipped) => {
           if (finished) return; finished = true;
           cancelAnimationFrame(rafId);
           view.destroy();
+          lockCodex(false);
           setActions();
           setTimeout(() => resolve(), skipped ? 150 : 900);
         };
@@ -618,8 +328,15 @@
             const ev = sim.events.shift();
             const ln = ev.lane;
             if (ev.type === 'break') {
-              view.wipeout(ln);
-              Caster.event(line('breaking', { name: ln.wave.name, H: ln.state.H.toFixed(2), h: ln.brokenH.toFixed(1) }), 2000);
+              breakCount++;
+              view.markBreakOrder(ln, breakCount);
+              if (ln.brokenAt <= ln.start + 1e-6) {
+                // 출발선부터 쇄파 (파고 1 m 파도가 수심 1 m 물에 놓인 경우) — 연출 없이 해설만
+                Caster.event(line('breakAtStart', { name: ln.wave.name, h: ln.brokenH.toFixed(1) }), 2600);
+              } else {
+                view.wipeout(ln);
+                Caster.event(line('breaking', { name: ln.wave.name, H: ln.state.H.toFixed(2), h: ln.brokenH.toFixed(1) }), 2000);
+              }
             } else if (ev.type === 'shallow') {
               if (now - lastLaneEventAt > 900 && !shallowSaid.has(ln.index)) {
                 shallowSaid.add(ln.index); lastLaneEventAt = now;
@@ -636,21 +353,24 @@
                 if (!race.endOnFirst) {
                   const remaining = Math.max(0, heat.lastTime - sim.t);
                   rampTarget = Math.max(1, remaining / (8 * heat.timeScale * session.speed));
-                } else if (O.has('mid', raceId)) {
-                  Caster.event(line('mid', null, raceId), 2600);
                 }
               } else {
                 Caster.event(line('finishNext', { name: ln.wave.name, rank: ev.rank, time: fmtTime(ln.finishTime) }), 1500);
               }
             }
           }
-          // 중계: 선두 / 격차
+          // 중계: 시간 트리거 대사(otter.js 데이터) / 선두 / 격차
           const elapsed = (now - startReal) / 1000;
-          if (!saidLead && elapsed > 3.5) {
+          if (hi === 0) for (const tl of timedLines) {
+            if (!tl.done && sim.t >= tl.at * heat.winnerTime) {
+              tl.done = true;
+              const lead = sim.leader();
+              Caster.event(O.fill(tl.text, { leader: lead.wave.name, gap: fmtDist(sim.gap()) }), 2600);
+            }
+          }
+          if (!saidLead && elapsed > 3.5 && !timedLines.length) {
             saidLead = true;
-            const lead = sim.leader();
-            if (hi === 0 && O.has('mid', raceId) && !race.endOnFirst) Caster.event(line('mid', null, raceId), 2600);
-            else if (race.id !== 'boss') Caster.event(line('lead', { name: lead.wave.name }), 2000);
+            Caster.event(line('lead', { name: sim.leader().wave.name }), 2000);
           }
           const gap = sim.gap();
           if (gap > gapPeak) gapPeak = gap;
@@ -681,7 +401,7 @@
     /* ---------- 정산 계산 ---------- */
     evaluate() {
       const race = this.race, plan = this.plan;
-      const out = { race, plan, bets: [], gained: 0, bonus: 0, design: null, newCards: [], newCodex: [] };
+      const out = { race, plan, bets: [], gained: 0, bonus: 0, design: null, newCards: [], updatedCards: [], newCodex: [] };
       const official = this.mode === 'official';
       const h0 = plan.heats[0];
       if (race.design) {
@@ -718,7 +438,8 @@
         const pts = correct && official ? bet.points : 0;
         out.gained += pts;
         if (official) this.bumpStreak(out, correct);
-        out.bets.push({ bet, choice, answer, correct, points: pts, choiceLabel: options[choice] ? options[choice].name : '—', answerLabel: options[answer] ? options[answer].name : '—' });
+        out.bets.push({ bet, choice, answer, correct, points: pts, choiceLabel: options[choice] ? options[choice].name : '—', answerLabel: options[answer] ? options[answer].name : '—',
+          explain: betExplain(race, plan, bet, choice, answer) });
       });
       return out;
     }
@@ -750,7 +471,8 @@
         betPanel.appendChild(el('div', { class: 'bet-result ' + (b.correct ? 'ok' : 'bad') },
           el('span', { class: 'mark' }, b.correct ? '✔ 적중' : '✘ 빗나감'),
           el('span', {}, `${b.bet.q} → 내 예측: ${b.choiceLabel} / 정답: ${b.answerLabel}`),
-          el('span', { class: 'pts' }, official ? `+${b.points}` : '시운전')));
+          el('span', { class: 'pts' }, official ? `+${b.points}` : '시운전'),
+          b.explain ? el('span', { class: 'explain' }, b.explain) : null));
       });
       if (res.bonus) betPanel.appendChild(el('div', { class: 'bet-result ok' }, el('span', { class: 'mark' }, '🔥 3연속 적중'), el('span', {}, '보너스'), el('span', { class: 'pts' }, `+${res.bonus}`)));
       app.appendChild(betPanel);
@@ -786,21 +508,32 @@
         const designOk = !res.design || res.design.ok;
         if (designOk) {
           progress.cleared[race.id] = true;
-          const summary = raceSummary(race, plan);
-          for (const cid of race.cards) if (!progress.codex[cid]) { progress.codex[cid] = { race: race.id, summary }; res.newCards.push(cid); }
+          const summary = race.design ? designSummary(race, this.design, res.design) : raceSummary(race, plan);
+          for (const cid of race.cards) {
+            const entry = progress.codex[cid];
+            if (!entry) {
+              progress.codex[cid] = { race: race.id, summary, entries: race.design ? { [race.id]: summary } : undefined };
+              res.newCards.push(cid);
+            } else if (race.design) {
+              // 설계 의뢰 카드 ⑦: 의뢰마다 기록을 누적한다
+              entry.entries = entry.entries || { [entry.race]: entry.summary };
+              if (!entry.entries[race.id]) { entry.entries[race.id] = summary; res.updatedCards.push(cid); }
+            }
+          }
           for (const wid of race.codex) if (!progress.codex[wid]) { progress.codex[wid] = { race: race.id, summary }; res.newCodex.push(wid); }
           saveProgress();
         }
         session.results.push({ race: race.id, title: `${race.no} ${race.title}`, points: res.gained });
       }
       const designOk = !res.design || res.design.ok;
-      if (official && designOk && (res.newCards.length || res.newCodex.length)) {
+      if (official && designOk && (res.newCards.length || res.updatedCards.length || res.newCodex.length)) {
         const row = el('div', { class: 'cards-row' });
-        res.newCards.forEach((cid, i) => {
+        const allCards = res.newCards.map(id => ({ id, updated: false })).concat(res.updatedCards.map(id => ({ id, updated: true })));
+        allCards.forEach(({ id: cid, updated }, i) => {
           const c = R.CARDS[cid];
           const fc = el('div', { class: 'flip-card' }, el('div', { class: 'flip-inner' },
-            el('div', { class: 'flip-face flip-front' }, '?'),
-            el('div', { class: 'flip-face flip-back' }, el('span', { class: 'no' }, `원리 카드 ${c.no}`), el('span', { class: 'title' }, c.title), el('span', { class: 'formula' }, c.formula), el('span', { class: 'line' }, c.line))));
+            el('div', { class: 'flip-face flip-front' }, updated ? '+' : '?'),
+            el('div', { class: 'flip-face flip-back' }, el('span', { class: 'no' }, `원리 카드 ${c.no}${updated ? ' · 기록 추가' : ''}`), el('span', { class: 'title' }, c.title), el('span', { class: 'formula' }, c.formula), el('span', { class: 'line' }, updated ? `${race.no} 결과가 카드에 추가됐습니다.` : c.line))));
           row.appendChild(fc);
           setTimeout(() => fc.classList.add('flipped'), 500 + i * 450);
         });
@@ -810,7 +543,7 @@
             el('div', { class: 'flip-face flip-front' }, '?'),
             el('div', { class: 'flip-face flip-back' }, el('span', { class: 'no' }, '파도 도감'), el('span', { class: 'title' }, `${c.emoji} ${c.name}`), el('span', { class: 'line' }, c.desc))));
           row.appendChild(fc);
-          setTimeout(() => fc.classList.add('flipped'), 500 + (res.newCards.length + i) * 450);
+          setTimeout(() => fc.classList.add('flipped'), 500 + (allCards.length + i) * 450);
         });
         app.appendChild(el('div', { class: 'panel' }, el('h3', {}, '📖 도감 등록'), row));
       }
@@ -824,6 +557,7 @@
         if (O.has('settle', race.id)) Caster.event(line('settle', null, race.id), 6000);
         if (res.newCards.length || res.newCodex.length) Caster.event(line('codex'), 3000);
       }
+      if (res.design && official && res.design.ok && (res.newCards.length || res.updatedCards.length)) Caster.event(line('codex'), 3000);
       if (!official) Caster.say(line('testRun') + ' ' + (res.design ? res.design.detail : ''));
 
       // 행동 버튼
@@ -842,110 +576,11 @@
       window.scrollTo({ top: 0 });
     }
 
-    /* ---------- 월드 3: 코스 편집기 ---------- */
+
+    /* ---------- 월드 3: 코스 편집기 (js/editor.js) ---------- */
     showEditor() {
       this.stage = 'editor';
-      const race = this.race, d = race.design, st = this.design;
-      app.innerHTML = '';
-      const panel = el('div', { class: 'panel' },
-        el('h2', {}, `${race.no} ${race.title}`),
-        el('div', { class: 'brief' }, el('div', {}, d.brief), el('div', { class: 'hint' }, d.hint)));
-      const grid = el('div', { class: 'editor-grid' });
-      const left = el('div');
-      const vw = 1000, vh = 220, pad = 14, y0 = 60;
-      const svg = svgEl('svg', { viewBox: `0 0 ${vw} ${vh}`, class: 'editor-svg', role: 'img', 'aria-label': '해저 지형 편집' });
-      const yOf = depthMapper(200, y0, vh);
-      const hOf = y => { // depthMapper 역함수
-        const denom = Math.log(1 + 200 / 0.5), span = vh - y0 - 6;
-        return 0.5 * (Math.exp((y - y0 - 6) / span * denom) - 1);
-      };
-      const px = x => pad + x / race.length * (vw - 2 * pad);
-      const xOf = p => (p - pad) / (vw - 2 * pad) * race.length;
-      svgEl('rect', { x: 0, y: y0, width: vw, height: vh - y0, fill: 'var(--sea)' }, svg);
-      if (d.window) {
-        svgEl('rect', { x: px(d.window[0]), y: 0, width: px(d.window[1]) - px(d.window[0]), height: vh, fill: 'var(--sun)', opacity: .4 }, svg);
-        const t = svgEl('text', { x: (px(d.window[0]) + px(d.window[1])) / 2, y: 18, 'text-anchor': 'middle', class: 'handle-label' }, svg); t.textContent = '목표 쇄파 구간';
-      }
-      const sandPath = svgEl('path', { fill: 'var(--sand)', stroke: 'var(--sand-3)', 'stroke-width': 1.5 }, svg);
-      svgEl('line', { x1: 0, y1: y0, x2: vw, y2: y0, stroke: 'var(--sea-deep)', 'stroke-width': 1.5 }, svg);
-      svgEl('line', { x1: px(500), y1: y0 - 10, x2: px(500), y2: vh, stroke: 'var(--ink-2)', 'stroke-width': 2, 'stroke-dasharray': '4 4' }, svg);
-      const ts = svgEl('text', { x: px(500) + 4, y: vh - 8, class: 'handle-label' }, svg); ts.textContent = '잔물결 출발선 (500 m)';
-      svgEl('line', { x1: px(race.length), y1: y0 - 10, x2: px(race.length), y2: vh, stroke: 'var(--coral)', 'stroke-width': 3, 'stroke-dasharray': '8 6' }, svg);
-      const guide1 = svgEl('line', { class: 'depth-guide' }, svg);
-      const guide2 = svgEl('line', { class: 'depth-guide' }, svg);
-      const mkHandle = () => {
-        const g = svgEl('g', { class: 'handle-g' }, svg);
-        svgEl('circle', { class: 'handle-hit', r: 34 }, g);
-        svgEl('circle', { class: 'handle', r: 15 }, g);
-        return g;
-      };
-      const h1 = mkHandle();
-      const h2 = mkHandle();
-      const l1 = svgEl('text', { class: 'handle-label', 'text-anchor': 'middle' }, svg);
-      const l2 = svgEl('text', { class: 'handle-label', 'text-anchor': 'middle' }, svg);
-      const tick = svgEl('text', { x: 6, y: yOf(200) - 4, class: 'handle-label' }, svg); tick.textContent = '수심 200 m';
-      left.appendChild(svg);
-
-      // 슬라이더
-      const HMIN = 1, HMAX = 100;
-      const hToSlider = h => Math.round(Math.log(h / HMIN) / Math.log(HMAX / HMIN) * 100);
-      const sliderToH = v => { const h = HMIN * Math.pow(HMAX / HMIN, v / 100); return h < 5 ? Math.round(h * 10) / 10 : Math.round(h); };
-      const controls = el('div', { class: 'panel' });
-      const xsVal = el('span', { class: 'val num' }), hVal = el('span', { class: 'val num' });
-      const xsIn = el('input', { type: 'range', id: 'edXs', min: 100, max: 2700, step: 50, value: st.xs });
-      const hIn = el('input', { type: 'range', id: 'edH', min: 0, max: 100, step: 1, value: hToSlider(st.hmid) });
-      const sbIn = el('input', { type: 'checkbox', id: 'edSb' }); sbIn.checked = !!st.sandbar;
-      controls.appendChild(el('div', { class: 'slider-row' }, el('label', { for: 'edXs' }, '① 얕아지기 시작 지점'), xsVal, xsIn));
-      controls.appendChild(el('div', { class: 'slider-row' }, el('label', { for: 'edH' }, '② 중간(대륙붕) 수심'), hVal, hIn));
-      controls.appendChild(el('div', { class: 'check-row' }, sbIn, el('label', { for: 'edSb' }, '③ 사주(수심 5 m 언덕) 넣기 — 중간 수심이 5 m보다 깊을 때만')));
-      controls.appendChild(el('p', { class: 'muted' }, '해안(3,000 m) 수심은 1 m로 고정. 조절점을 드래그하거나 슬라이더를 쓰세요.'));
-      const laneCards = el('div', { class: 'wave-cards' });
-      race.lanes.forEach(ls => {
-        laneCards.appendChild(el('div', { class: 'wave-card' }, el('span', { class: 'emoji' }, ls.wave.emoji), el('span', { class: 'name' }, ls.wave.name),
-          el('span', { class: 'spec' }, `λ₀ ${fmtDist(ls.wave.lambda0)}`), ls.start ? el('span', { class: 'handicap' }, `${fmtNum(ls.start)} m 앞에서 출발`) : null));
-      });
-      controls.appendChild(laneCards);
-      grid.appendChild(left); grid.appendChild(controls);
-      panel.appendChild(grid);
-      app.appendChild(panel);
-
-      const redraw = () => {
-        const bathy = R.designCourse(st);
-        let dd = `M0,${vh} L0,${yOf(200)}`;
-        for (let x = 0; x <= race.length; x += 10) dd += ` L${px(x).toFixed(1)},${yOf(P.depthAt(bathy, x)).toFixed(1)}`;
-        dd += ` L${vw},${vh} Z`;
-        sandPath.setAttribute('d', dd);
-        const xe = st.xs + 150, xc = Math.max(xe, 2700), xm = (xe + xc) / 2;
-        h1.setAttribute('transform', `translate(${px(st.xs)},${y0})`);
-        h2.setAttribute('transform', `translate(${px(xm)},${yOf(st.hmid)})`);
-        l1.setAttribute('x', px(st.xs)); l1.setAttribute('y', y0 - 22); l1.textContent = `⟷ ${fmtNum(st.xs)} m부터 얕아짐`;
-        l2.setAttribute('x', px(xm)); l2.setAttribute('y', yOf(st.hmid) - 22); l2.textContent = `↕ 수심 ${fmtDepth(st.hmid)}`;
-        guide1.setAttribute('x1', px(st.xs)); guide1.setAttribute('x2', px(st.xs)); guide1.setAttribute('y1', y0); guide1.setAttribute('y2', vh);
-        guide2.setAttribute('x1', 0); guide2.setAttribute('x2', vw); guide2.setAttribute('y1', yOf(st.hmid)); guide2.setAttribute('y2', yOf(st.hmid));
-        xsVal.textContent = `${fmtNum(st.xs)} m`; hVal.textContent = fmtDepth(st.hmid);
-        if (String(xsIn.value) !== String(st.xs)) xsIn.value = st.xs;
-        if (Number(hIn.value) !== hToSlider(st.hmid)) hIn.value = hToSlider(st.hmid);
-        sbIn.checked = !!st.sandbar;
-      };
-      xsIn.addEventListener('input', () => { st.xs = Number(xsIn.value); redraw(); });
-      hIn.addEventListener('input', () => { st.hmid = sliderToH(Number(hIn.value)); redraw(); });
-      sbIn.addEventListener('change', () => { st.sandbar = sbIn.checked; redraw(); });
-      // 드래그
-      const toSvg = (e) => { const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY; return pt.matrixTransform(svg.getScreenCTM().inverse()); };
-      const drag = (handle, onMove) => {
-        handle.addEventListener('pointerdown', e => {
-          e.preventDefault(); handle.setPointerCapture(e.pointerId);
-          const move = ev => { onMove(toSvg(ev)); redraw(); };
-          const up = () => { handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', up); };
-          handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', up);
-        });
-      };
-      drag(h1, p => { st.xs = clamp(Math.round(xOf(p.x) / 50) * 50, 100, 2700); });
-      drag(h2, p => { const h = clamp(hOf(p.y), HMIN, HMAX); st.hmid = h < 5 ? Math.round(h * 10) / 10 : Math.round(h); });
-      redraw();
-
-      Caster.say(O.has('paddock', race.id) ? line('paddock', null, race.id) : line('paddock'));
-      setActions(btn('시운전 🔧', () => this.runAll('test'), 'secondary'), btn('제출 🏁', () => this.runAll('official')));
+      window.WaveRaceEditor.buildEditor(this);
     }
   }
 
@@ -976,6 +611,33 @@
         el('span', { class: 'muted' }, `17,000,000 m ÷ ${Math.round(ts.maxC)} m/s ≈ ${fmtTime(17000000 / ts.maxC)} · 1960년 칠레 지진 쓰나미 실제 약 22시간`)));
     }
     return box;
+  }
+  /** 정산에서 "왜 맞았/틀렸는지" 한 줄: 내 선택과 정답의 근거를 나란히 */
+  function betExplain(race, plan, bet, choice, answer) {
+    const h = plan.heats[0];
+    const laneLine = (i) => {
+      const ln = h.pre.lanes[i]; if (!ln) return '';
+      const w = ln.wave;
+      const lam = race.hideLambda ? `T = ${w.T.toFixed(0)} s → λ ≈ ${fmtNum(w.lambdaDeep)} m` : `λ₀ ${fmtDist(w.lambda0)}`;
+      if (bet.type === 'firstBreak') return `${w.name}: ${lam}, ${ln.brokenAt != null ? `${fmtNum(ln.brokenAt)} m(수심 ${fmtDepth(ln.brokenH)})에서 ${fmtTime(ln.brokenT)}에 쇄파` : '부서지지 않음'}`;
+      return `${w.name}: ${lam} → 최고 ${fmtSpeed(ln.maxC)}, 도착 ${fmtTime(ln.finishTime)}`;
+    };
+    if (bet.type === 'winner' || bet.type === 'firstBreak') {
+      const parts = [];
+      if (choice !== answer && choice != null) parts.push('내 예측 ' + laneLine(choice));
+      if (answer != null) parts.push('정답 ' + laneLine(answer));
+      return parts.join(' · ');
+    }
+    if (bet.type === 'gap') return plan.heats.map(hh => `${hh.short}: 격차 ${fmtTime(hh.lastTime - hh.winnerTime)}`).join(' · ');
+    if (bet.type === 'choice' && race.id === 'boss') {
+      const ts = h.pre.lanes.reduce((a, b) => (b.maxC > a.maxC ? b : a));
+      return `17,000,000 m ÷ √(9.8 × 4,000) ≈ ${Math.round(ts.maxC)} m/s → ${fmtTime(ts.finishTime)}`;
+    }
+    return '';
+  }
+  function designSummary(race, d, dres) {
+    const cfg = `얕아지기 ${fmtNum(d.xs)} m · 수심 ${fmtDepth(d.hmid)}${d.sandbar && d.hmid > 5 ? ' · 사주' : ''}`;
+    return `${race.no} 성공 (${cfg}) → ${dres.detail}`;
   }
   function raceSummary(race, plan) {
     const h = plan.heats[0];
@@ -1012,6 +674,7 @@
     if (hasProgress && !allDone) {
       const nr = R.byId(nextId);
       buttons.appendChild(btn(`이어하기 (${nr.no}부터) ▶`, () => startRace(nextId), 'big'));
+      buttons.appendChild(el('p', { class: 'title-note', style: 'margin:0' }, '점수는 저장되지 않아 이어하기는 0점부터 다시 셉니다. 최종 등급은 이번에 치른 경기 기준입니다.'));
       buttons.appendChild(btn('처음부터', () => { session.points = 0; session.streak = 0; session.results = []; renderPoints(); startRace('r1'); }, 'secondary'));
     } else {
       buttons.appendChild(btn('경기 시작 ▶', () => { session.points = 0; session.streak = 0; session.results = []; renderPoints(); startRace('r1'); }, 'big'));
@@ -1050,7 +713,11 @@
         if (got) {
           cell.appendChild(el('span', { class: 'formula' }, cd.formula));
           cell.appendChild(el('span', { class: 'desc' }, cd.line));
-          cell.appendChild(el('span', { class: 'summary' }, `등록 경기 ${R.byId(got.race).no} · ${got.summary}`));
+          if (got.entries) {
+            const ul = el('ul', { class: 'entry-list' });
+            Object.keys(got.entries).forEach(rid => ul.appendChild(el('li', {}, got.entries[rid])));
+            cell.appendChild(ul);
+          } else cell.appendChild(el('span', { class: 'summary' }, `등록 경기 ${R.byId(got.race).no} · ${got.summary}`));
         } else cell.appendChild(el('span', { class: 'desc' }, '잠김 — 경기를 마치면 뒤집힙니다.'));
       }
       grid.appendChild(cell);
@@ -1100,13 +767,15 @@
       el('div', { class: 'grade-emoji' }, grade.emoji),
       el('div', { class: 'grade' }, grade.name),
       el('p', {}, '예측 포인트 ', el('b', { class: 'num', style: 'font-size:28px;color:var(--coral-2)' }, fmtNum(pts))),
-      el('p', { class: 'muted' }, '0~299 파도 초보 · 300~599 해변 단골 · 600~899 노련한 서퍼 · 900+ 바다를 읽는 자')));
+      el('p', { class: 'muted' }, '0~299 파도 초보 · 300~599 해변 단골 · 600~899 노련한 서퍼 · 900+ 바다를 읽는 자'),
+      session.results.length < R.RACES.length ? el('p', { class: 'muted' }, `이번 세션에서 치른 ${session.results.length}경기 기준입니다. 이어하기 이전 경기는 포함되지 않습니다.`) : null));
     if (session.results.length) app.appendChild(el('div', { class: 'panel' }, el('h3', {}, '이번 세션 경기 기록'), ul));
     Caster.say(line('final'));
     setActions(btn('📖 도감', () => showCodex(showFinal), 'ghost'), btn('처음으로', showTitle));
   }
 
   /* ---------- 시작 ---------- */
+  window.WaveRaceCore = { app, Caster, setActions, btn, line, progress: () => progress, session };
   renderPoints();
   showTitle();
   window.WaveRace = { Physics: P, Races: R, Otter: O, session, progress, startRace, showTitle, showCodex, showTeacher, buildPlan };

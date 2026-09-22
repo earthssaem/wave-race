@@ -231,7 +231,7 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
 .badge.shallow { background: var(--sand-3); }
 .badge.broken { background: var(--coral); }
 .badge.finished { background: var(--ok); }
-.speed { font-family: var(--font-title); font-size: 16px; min-width: 76px; text-align: right; }
+.speed { font-family: var(--font-title); font-size: 16px; min-width: 76px; text-align: right; white-space: nowrap; }
 .speed small { font-size: 11px; color: var(--ink-2); }
 .lanes { --lane-count: 4; }
 .lane-svg { width: 100%; height: clamp(72px, calc((100vh - 360px) / var(--lane-count)), var(--lane-h)); display: block; background: var(--sky); }
@@ -354,6 +354,10 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
 .bet-result.ok .mark { color: var(--ok); }
 .bet-result.bad .mark { color: var(--bad); }
 .bet-result .pts { margin-left: auto; font-family: var(--font-title); font-size: 20px; color: var(--coral-2); }
+.bet-result .explain { flex-basis: 100%; font-size: 13px; color: var(--ink-2); }
+.badge.order { background: var(--sun); color: var(--ink); }
+.entry-list { margin: 4px 0 0; padding-left: 16px; font-size: 12px; color: var(--sea-deep); }
+.entry-list li { margin-bottom: 2px; }
 .formula { font-family: var(--font-title); font-size: 17px; background: var(--sky); border-radius: 10px; padding: 6px 12px; display: inline-block; }
 
 /* 원리 카드 (뒤집기) */
@@ -398,6 +402,8 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
 .editor-svg .handle-g:active { cursor: grabbing; }
 .editor-svg .handle { fill: var(--coral); stroke: #fff; stroke-width: 3; pointer-events: none; }
 .editor-svg .handle-hit { fill: transparent; }
+.editor-svg .handle-g:focus { outline: none; }
+.editor-svg .handle-g:focus-visible .handle { stroke: var(--sun); stroke-width: 5; }
 .editor-svg .handle-label { font-family: var(--font-title); font-size: 13px; fill: var(--ink); }
 .editor-svg .depth-guide { stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 3 3; }
 .slider-row { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center; margin-bottom: 10px; }

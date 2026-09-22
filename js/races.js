@@ -19,20 +19,20 @@
   function coast(xs, len) {
     const len_ = len || L;
     const r = len_ - xs;
-    return [[0, 200], [xs, 200], [xs + r * 0.45, 10], [xs + r * 0.65, 3], [len_, 1]];
+    return [[0, 200], [xs, 200], [xs + r * 0.4, 10], [xs + r * 0.55, 3], [len_, 1]];
   }
   const COURSES = {
     deep: [[0, 200], [L, 200]],
     gentle: coast(600),
     basic: coast(1800),
     cliff: coast(2700),
-    sandbar: [[0, 200], [1200, 200], [1500, 5], [1700, 5], [2000, 200], [2700, 200], [2835, 10], [2895, 3], [L, 1]],
+    sandbar: [[0, 200], [1200, 200], [1500, 5], [1700, 5], [2000, 200], [2700, 200], [2820, 10], [2865, 3], [L, 1]],
     pacific: [[0, 4000], [16800000, 4000], [17000000, 30]],
   };
 
   /**
    * 월드 3 편집기용 지형 생성.
-   * xs: 얕아지기 시작 지점(m), hmid: 대륙붕 수심(m), sandbar: 사주 유무
+   * xs: 얕아지기 시작 지점(m), hmid: 대륙붕 수심(m, 최소 1), sandbar: 사주 유무
    * 모양: 앞바다 200 m → (150 m에 걸쳐) hmid → 평평 → 2,700 m부터 해안 1 m
    */
   function designCourse(d) {
@@ -105,6 +105,8 @@
   const R1_LANES = () => [lane(WAVES.ripple), lane(WAVES.wind), lane(WAVES.long), lane(WAVES.swell)];
 
   /* ---------- 경기 ---------- */
+  const DESIGN_LIMITS = { xsMin: 100, xsMax: 2700, xsStep: 50, hMin: 1, hMax: 100 };
+
   const RACES = [
     {
       id: 'r1', world: 'w1', no: 'R1', title: '개막전', length: L, bathy: COURSES.deep,
@@ -168,7 +170,7 @@
     {
       id: 'r7', world: 'w3', no: 'R7', title: '의뢰: 너울을 이기게 하라', length: L,
       lanes: [lane(WAVES.swell), lane(WAVES.ripple, { start: 500 })],
-      design: { goal: 'swellWins', initial: { xs: 200, hmid: 1.5, sandbar: false },
+      design: { goal: 'swellWins', initial: { xs: 100, hmid: 1, sandbar: false },
                 brief: '잔물결이 500 m 앞에서 출발합니다(핸디캡). 너울이 따라잡아 1위 하도록 코스를 설계하세요.',
                 hint: '힌트: 깊은 구간을 길게', points: POINTS.design },
       bets: [], cards: ['c7'], codex: [],
@@ -198,7 +200,7 @@
     },
   ];
 
-  const Races = { WAVES, COURSES, WORLDS, CARDS, CODEX, POINTS, GRADES, RACES, coast, designCourse,
+  const Races = { WAVES, COURSES, WORLDS, CARDS, CODEX, POINTS, GRADES, RACES, DESIGN_LIMITS, coast, designCourse,
     byId(id) { return RACES.find(r => r.id === id); },
     indexOf(id) { return RACES.findIndex(r => r.id === id); },
   };

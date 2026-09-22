@@ -16,7 +16,8 @@
   function solveK(omega, h) {
     const w2 = omega * omega;
     let k = w2 / G;
-    for (let i = 0; i < 12; i++) {
+    // 보통 10회 안에 수렴하지만, 극단적인 (긴 주기·얕은 수심) 경우를 위해 허용 오차까지 반복
+    for (let i = 0; i < 40; i++) {
       const kh = k * h;
       const th = Math.tanh(kh);
       const f = G * k * th - w2;
@@ -131,8 +132,10 @@
     const lanes = opts.lanes.map((ls, i) => {
       const bathy = ls.bathy;
       const start = ls.start || 0;
-      const h0 = depthAt(bathy, start);
+      // 파도의 ω는 코스 앞바다(x=0) 수심에서 정의한다. 핸디캡으로 앞에서 출발해도 같은 파도다.
+      const h0 = ls.refDepth != null ? ls.refDepth : depthAt(bathy, 0);
       const wave = makeWave(ls.wave, h0);
+      const hs = depthAt(bathy, start);
       return {
         index: i,
         id: ls.id || ('lane' + i),
@@ -141,10 +144,10 @@
         start,
         x: start,
         t: 0,
-        h: h0,
-        c: wave.c0,
-        state: waveState(wave, h0),
-        regime: regimeOf(h0, wave.lambda0),
+        h: hs,
+        c: waveState(wave, hs).c,
+        state: waveState(wave, hs),
+        regime: waveState(wave, hs).regime,
         seenShallow: false,
         seenTransition: false,
         broken: false,

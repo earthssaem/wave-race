@@ -4,8 +4,10 @@
 "파도 경주에 베팅(예측)"하는 게임 루프로 익힙니다. 해달 캐스터가 경마 중계 톤으로 원리를 해설합니다.
 
 - 정적 사이트 (빌드 없음, 외부 라이브러리 없음). Vercel 등에 그대로 배포.
-- `index.html` · `css/style.css` · `js/physics.js`(파동 계산) · `js/races.js`(경기 데이터) · `js/otter.js`(해설 대사) · `js/game.js`(진행·화면)
-- 도감·진행도만 `localStorage`에 저장. 예측·점수는 화면에만 표시되고 기록·전송되지 않습니다.
+- `index.html` · `css/style.css`
+- `js/physics.js`(파동 계산) · `js/races.js`(경기 데이터) · `js/otter.js`(해설 대사·시간 트리거)
+- `js/ui.js`(공용 DOM/포맷 유틸) · `js/raceview.js`(레이스 SVG 렌더링) · `js/editor.js`(월드 3 지형 편집기) · `js/game.js`(진행·화면)
+- 도감·진행도(및 다크 모드 선택)만 `localStorage`에 저장. 예측·점수는 화면에만 표시되고 기록·전송되지 않습니다.
 
 ## 물리
 
@@ -29,6 +31,14 @@
 - 월드 1 먼바다 그랑프리(R1~R3) · 월드 2 해안 클래식(R4~R6) · 월드 3 코스 설계사(R7~R9, 지형 편집) · 보스전 쓰나미 특별전
 - 예측 포인트: 1위 +100, 쇄파 +50, 격차 +100, 설계 의뢰 +150, 보스 +200, 3연속 적중 +50
 - 선생님 모드: 아무 경기나 바로 열기, 배속 조절, 진행도 초기화 (비밀번호 없음)
+
+## 테스트
+
+```
+node test/physics.test.js                      # 물리 검증 수치·경기 정답·데이터 정합성
+python3 -m http.server 8765 &                  # 정적 서버
+NODE_PATH=$(npm root -g) node test/e2e.js      # Playwright로 전 경기 통과 (playwright 전역 설치 필요)
+```
 
 ## 로컬 실행
 
